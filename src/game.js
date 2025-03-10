@@ -18,24 +18,15 @@ const CAMERA_DISTANCE = 5;
 const CAMERA_LERP = 0.1;
 const ROTATION_SPEED = 0.02;
 
-// Global colors for our beach paradise
-const colors = {
-    sand: 0xffd998,
-    wetSand: 0xe6c288,
-    drySand: 0xffebc8,
-    water: 0x4ac7e9,
-    deepWater: 0x2389da,
-    palmTrunk: 0x8b4513,
-    palmLeaves: 0x2d5a27,
-    sky: 0x87ceeb,
-    character: 0xff6b6b,
-    umbrella: 0xff4444,
-    towel: 0x4286f4,
-    rocks: 0x808080,
-    shells: 0xfff5ee,
-    grass: 0x90EE90
-};
 
+const colors = {
+  sky: 0x87CEEB,
+  sand: 0xEDC9AF,
+  water: 0x0077FF,
+  palmTrunk: 0x4A3A2A,
+  palmLeaves: 0x228833,
+  rock: 0x555555
+};
 // Helper function to get the terrain height at a given (x, z)
 function getTerrainHeightAt(x, z) {
     if (!terrain) return 0;
@@ -82,205 +73,123 @@ function init() {
     directionalLight.shadow.camera.far = 500;
     scene.add(directionalLight);
 
-    createIsland();      // Try to load island model; falls back to procedural
+
+    createTerrain();
+    createWater();
     createCharacter();
     setupControls();
-    createWater();       // Create water using a segmented plane
-
+    createPalmTree(15, 0, 15);
+    createPalmTree(-20, 0, 10);
+    createPalmTree(10, 0, -25);
+    createRocks();
     window.addEventListener('resize', onWindowResize, false);
     animate();
 }
 
-function createIsland() {
-    const loader = new GLTFLoader();
-    
-    loader.load(
-        'models/terrain.glb',
-        (gltf) => {
-            const model = gltf.scene;
-            model.scale.set(50, 50, 50);
-            model.position.set(0, 0, 0);
-            model.traverse((child) => {
-                if (child.isMesh) {
-                    child.material = new THREE.MeshStandardMaterial({
-                        color: child.material.color,
-                        flatShading: true,
-                        side: THREE.DoubleSide
-                    });
-                    child.castShadow = true;
-                    child.receiveShadow = true;
-                }
-            });
-            terrain = model;
-            scene.add(terrain);
+function createTerrain() {
+  const textureLoader = new THREE.TextureLoader();
+  const sandTexture = textureLoader.load('https://threejs.org/examples/textures/terrain/sand.jpg');
+  sandTexture.wrapS = sandTexture.wrapT = THREE.RepeatWrapping;
+  sandTexture.repeat.set(100, 100);
 
-            // Once the terrain is loaded, add decorations
-            addBeachDecorations();
-            addPalmTrees();
-        },
-        (progress) => {
-            console.log('Loading progress:', (progress.loaded / progress.total * 100) + '%');
-        },
-        (error) => {
-            console.error('Error loading model:', error);
-            createProceduralIsland();
-        }
-    );
+  const terrainGeometry = new THREE.PlaneGeometry(1000, 1000, 200, 200);
+  const terrainMaterial = new THREE.MeshStandardMaterial({
+    map: sandTexture,
+    color: colors.sand,
+    displacementScale: 10,
+    roughness: 0.8
+  });
+
+  // Add gentle hills using noise
+  const vertices = terrainGeometry.attributes.position.array;
+  for (let i = 0; i < vertices.length; i += 3) {
+    vertices[i + 2] = (Math.sin(vertices[i] * 0.02) + Math.cos(vertices[i + 1] * 0.02)) * 2;
+  }
+
+  terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
+  terrain.rotation.x = -Math.PI / 2;
+  terrain.receiveShadow = true;
+  scene.add(terrain);
 }
 
-function createProceduralIsland() {
-    console.log('Falling back to procedural island generation');
+function createCharacter() {
+  const bodyGeometry = new THREE.CapsuleGeometry(0.3, 1, 4, 8);
+  const headGeometry = new THREE.SphereGeometry(0.4);
+  const material = new THREE.MeshStandardMaterial({ color: 0x00FF00 });
 
-    // Create a circular geometry and displace its vertices
-    const radius = 50;
-    const segments = 64;
-    const geometry = new THREE.CircleGeometry(radius, segments);
-    geometry.rotateX(-Math.PI / 2);
-    const posAttr = geometry.attributes.position;
-    const vertexCount = posAttr.count;
-    const noise = new SimplexNoise();
-    
-    // Create an array for vertex colors
-    const vertexColors = new Float32Array(vertexCount * 3);
+  const body = new THREE.Mesh(bodyGeometry, material);
+  const head = new THREE.Mesh(headGeometry, material);
+  head.position.y = 1.2;
 
-    for (let i = 0; i < vertexCount; i++) {
-        const x = posAttr.getX(i);
-        const z = posAttr.getZ(i);
-        const distance = Math.sqrt(x * x + z * z);
-
-        // Base height calculation using island and beach parameters
-        let height = 0;
-        const beachStart = 25;
-        const islandRadius = 35;
-
-        if (distance < beachStart) {
-            const norm = distance / beachStart;
-            height = 5 * (1 - norm * norm);
-            height += noise.noise(x * 0.1, z * 0.1) * 1.5;
-        } else if (distance < islandRadius) {
-            const t = (distance - beachStart) / (islandRadius - beachStart);
-            height = 2 * (1 - t);
-            height += noise.noise(x * 0.2, z * 0.2) * 0.5 * (1 - t);
-        }
-        posAttr.setY(i, Math.max(0, height));
-
-        // Assign vertex color based on distance and height
-        const color = new THREE.Color();
-        if (distance >= islandRadius) {
-            color.setHex(colors.water);
-        } else if (distance >= beachStart) {
-            const t = (distance - beachStart) / (islandRadius - beachStart);
-            color.setHex(colors.sand).lerp(new THREE.Color(colors.wetSand), t);
-        } else {
-            color.setHex(colors.grass);
-            if (noise.noise(x * 0.3, z * 0.3) > 0.6) {
-                color.lerp(new THREE.Color(colors.sand), 0.2);
-            }
-        }
-        vertexColors[i * 3] = color.r;
-        vertexColors[i * 3 + 1] = color.g;
-        vertexColors[i * 3 + 2] = color.b;
-    }
-    geometry.setAttribute('color', new THREE.BufferAttribute(vertexColors, 3));
-    geometry.computeVertexNormals();
-
-    const material = new THREE.MeshStandardMaterial({
-        vertexColors: true,
-        flatShading: true,
-        side: THREE.DoubleSide
-    });
-    terrain = new THREE.Mesh(geometry, material);
-    terrain.receiveShadow = true;
-    scene.add(terrain);
-
-    addBeachDecorations();
-    addPalmTrees();
+  character = new THREE.Group();
+  character.add(body, head);
+  character.castShadow = true;
+  character.position.set(0, 5, 0);
+  scene.add(character);
 }
 
 function createWater() {
-    // Create a deep water layer (background)
-    const deepWaterGeometry = new THREE.PlaneGeometry(400, 400, 50, 50);
-    const deepWaterMaterial = new THREE.MeshPhongMaterial({
-        color: colors.deepWater,
-        transparent: true,
-        opacity: 0.9,
-        shininess: 90,
-        flatShading: true
-    });
-    const deepWater = new THREE.Mesh(deepWaterGeometry, deepWaterMaterial);
-    deepWater.rotation.x = -Math.PI / 2;
-    deepWater.position.y = -0.2;
-    scene.add(deepWater);
+  const waterGeometry = new THREE.PlaneGeometry(1000, 1000);
+  const waterMaterial = new THREE.MeshStandardMaterial({
+    color: colors.water,
+    transparent: true,
+    opacity: 0.6,
+    metalness: 0.8,
+    roughness: 0.2
+  });
 
-    // Create a surface water layer (animated waves)
-    const waterGeometry = new THREE.PlaneGeometry(400, 400, 50, 50);
-    const waterMaterial = new THREE.MeshPhongMaterial({
-        color: colors.water,
-        transparent: true,
-        opacity: 0.6,
-        shininess: 100,
-        flatShading: true
-    });
-    water = new THREE.Mesh(waterGeometry, waterMaterial);
-    water.rotation.x = -Math.PI / 2;
-    water.position.y = 0;
-    water.receiveShadow = true;
-    scene.add(water);
+  water = new THREE.Mesh(waterGeometry, waterMaterial);
+  water.rotation.x = -Math.PI / 2;
+  water.position.y = 0.1;
+  scene.add(water);
 }
 
-function addPalmTrees() {
-    const noise = new SimplexNoise();
-    const numTrees = 25;
-    
-    for (let i = 0; i < numTrees; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const radius = 15 + Math.random() * 15;
-        const x = Math.cos(angle) * radius;
-        const z = Math.sin(angle) * radius;
-        
-        if (radius > 10 && radius < 35) {
-            const scale = 0.7 + Math.random() * 0.6;
-            createPalmTree(x, z, scale);
-        }
-    }
+function createPalmTree(x, y, z) {
+  const trunkGeometry = new THREE.CylinderGeometry(0.3, 0.4, 6, 8);
+  const trunkMaterial = new THREE.MeshStandardMaterial({ color: colors.palmTrunk });
+  const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+  trunk.position.set(x, y + 3, z);
+
+  const leavesGeometry = new THREE.ConeGeometry(3, 4, 8);
+  const leavesMaterial = new THREE.MeshStandardMaterial({ color: colors.palmLeaves });
+  const leaves = new THREE.Mesh(leavesGeometry, leavesMaterial);
+  leaves.position.set(x, y + 6, z);
+  leaves.rotation.x = Math.PI / 2;
+
+  const tree = new THREE.Group();
+  tree.add(trunk, leaves);
+  tree.castShadow = true;
+  scene.add(tree);
 }
 
-function createPalmTree(x, z, scale) {
-    const group = new THREE.Group();
-    
-    // Trunk
-    const trunkGeometry = new THREE.CylinderGeometry(0.2 * scale, 0.3 * scale, 4 * scale, 8);
-    const trunkMaterial = new THREE.MeshStandardMaterial({
-        color: colors.palmTrunk,
-        flatShading: true,
-        roughness: 0.9
-    });
-    const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
-    trunk.castShadow = true;
-    group.add(trunk);
+function createRocks() {
+  const rockGeometry = new THREE.SphereGeometry(1, 6, 6);
+  const rockMaterial = new THREE.MeshStandardMaterial({ color: colors.rock });
 
-    // Leaves
-    const numLeaves = 5;
-    for (let i = 0; i < numLeaves; i++) {
-        const angle = (i / numLeaves) * Math.PI * 2;
-        const leavesGeometry = new THREE.ConeGeometry(1 * scale, 2 * scale, 4);
-        const leavesMaterial = new THREE.MeshStandardMaterial({
-            color: colors.palmLeaves,
-            flatShading: true,
-            roughness: 0.8
-        });
-        const leaves = new THREE.Mesh(leavesGeometry, leavesMaterial);
-        leaves.position.y = 2 * scale;
-        leaves.rotation.x = Math.PI * 0.2;
-        leaves.rotation.y = angle;
-        leaves.castShadow = true;
-        group.add(leaves);
-    }
-    
-    group.position.set(x, getTerrainHeightAt(x, z), z);
-    scene.add(group);
+  for (let i = 0; i < 20; i++) {
+    const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+    const scale = 0.2 + Math.random() * 0.8;
+    rock.scale.set(scale, scale * 0.8, scale);
+    rock.position.set(
+      (Math.random() - 0.5) * 200,
+      0.5,
+      (Math.random() - 0.5) * 200
+    );
+    rock.rotation.set(
+      Math.random() * Math.PI,
+      Math.random() * Math.PI,
+      Math.random() * Math.PI
+    );
+    rock.castShadow = true;
+    scene.add(rock);
+  }
 }
 
+function updateWater() {
+  // Simple water animation
+  water.material.opacity = 0.5 + Math.sin(clock.getElapsedTime() * 2) * 0.1;
+  water.position.y = 0.1 + Math.sin(clock.getElapsedTime()) * 0.05;
+}
 function addBeachDecorations() {
     const numClusters = 12;
     for (let i = 0; i < numClusters; i++) {
@@ -350,49 +259,6 @@ function createShell(x, z, parent) {
     parent.add(shell);
 }
 
-function createBeachUmbrella(x, z, parent) {
-    const group = new THREE.Group();
-
-    // Umbrella pole
-    const poleGeometry = new THREE.CylinderGeometry(0.05, 0.05, 2.5, 8);
-    const poleMaterial = new THREE.MeshStandardMaterial({
-        color: 0xcccccc,
-        flatShading: true
-    });
-    const pole = new THREE.Mesh(poleGeometry, poleMaterial);
-    pole.rotation.x = Math.PI * 0.1;
-    pole.castShadow = true;
-    group.add(pole);
-
-    // Umbrella top
-    const topGeometry = new THREE.ConeGeometry(2, 0.5, 16);
-    const topMaterial = new THREE.MeshStandardMaterial({
-        color: colors.umbrella,
-        flatShading: true,
-        side: THREE.DoubleSide
-    });
-    const top = new THREE.Mesh(topGeometry, topMaterial);
-    top.position.y = 2;
-    top.castShadow = true;
-    group.add(top);
-
-    // Beach towel
-    const towelGeometry = new THREE.PlaneGeometry(2, 1);
-    const towelMaterial = new THREE.MeshStandardMaterial({
-        color: colors.towel,
-        flatShading: true,
-        side: THREE.DoubleSide
-    });
-    const towel = new THREE.Mesh(towelGeometry, towelMaterial);
-    towel.rotation.x = -Math.PI / 2;
-    towel.position.set(1.5, 0.01, 0);
-    towel.receiveShadow = true;
-    group.add(towel);
-
-    group.position.set(x, getTerrainHeightAt(x, z), z);
-    group.rotation.y = Math.random() * Math.PI * 2;
-    parent.add(group);
-}
 
 function createCharacter() {
     const geometry = new THREE.BoxGeometry(0.5, 1, 0.5);
