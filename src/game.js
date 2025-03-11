@@ -289,7 +289,7 @@ function createTerrain() {
     const terrainGeometry = new THREE.PlaneGeometry(800, 800, 150, 150);
     const sandMaterial = createPBRMaterial(
         'textures/sandy2/ground_0024_color_1k.jpg',
-        'textures/sandy2/ground_0024_normal_opengl_1k.png',
+        'textures/sandy2/ground_0024_normal_opengl_1k_8bit.png',
         'textures/sandy2/ground_0024_roughness_1k.jpg',
         'textures/sandy2/ground_0024_height_1k.png',
         'textures/sandy2/ground_0024_ao_1k.jpg',
