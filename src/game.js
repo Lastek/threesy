@@ -6,6 +6,7 @@ import * as sRand from '../src/seededRand.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
 import { DDSLoader } from 'three/examples/jsm/loaders/DDSLoader';
+// import * as joy from '../src/joystick.js';
 // document.body.appendChild(shadowFolder.dom);
 const stats = new Stats();
 document.body.appendChild(stats.dom);
@@ -114,12 +115,14 @@ function collectOrb(index) {
     orb.material.dispose();
     orbs.splice(index, 1);
 }
+
 function init() {
 
 const gui = new GUI();
 const shadowFolder = gui.addFolder('Shadows');
     clock = new THREE.Clock();
     sRand.setSeed(2);
+    // joy.init(document);
     // Scene
     scene = new THREE.Scene();
     scene.background = new THREE.Color(colors.sky);
