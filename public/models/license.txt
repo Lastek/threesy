@@ -1,0 +1,11 @@
+Model Information:
+* title:	Low Poly Palm Tree
+* source:	https://sketchfab.com/3d-models/low-poly-palm-tree-58f448209beb43659e95ca0e1ad59ac2
+* author:	eucalyp555 (https://sketchfab.com/eucalyp555)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Low Poly Palm Tree" (https://sketchfab.com/3d-models/low-poly-palm-tree-58f448209beb43659e95ca0e1ad59ac2) by eucalyp555 (https://sketchfab.com/eucalyp555) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
