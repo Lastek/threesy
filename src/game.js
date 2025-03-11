@@ -5,7 +5,7 @@ import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'; // Add this
 import * as sRand from '../src/seededRand.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
-
+import { DDSLoader } from 'three/examples/jsm/loaders/DDSLoader';
 // document.body.appendChild(shadowFolder.dom);
 const stats = new Stats();
 document.body.appendChild(stats.dom);
@@ -215,50 +215,54 @@ function updateAxesWidget() {
 }
 function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUrl, aoUrl) {
     const textureLoader = new THREE.TextureLoader();
-    const exrLoader = new EXRLoader(); // Add EXR loader
+    const exrLoader = new EXRLoader();
+    const ddsLoader = new DDSLoader();
     const mat = new THREE.MeshPhysicalMaterial({
-        color: 0xEDC9AF, // Your original sand color from `colors.sand`
-        shadowSide: THREE.FrontSide, // Improve shadow rendering
-        roughness: 0.8, // Slightly higher default roughness for sand
-        metalness: 0.0, // Low metalness for sandy beach
-        displacementScale: 0.4, // Reduce this if displacement noise is too strong
-        displacementBias: -0.0, // Optiponal: tweak if displacement offsets are off
-        transmission: 0.2, // Subtle transmission for light scattering (0-1 range)
-        displacementScale:0.5,
+        color: 0xEDC9AF,
+        shadowSide: THREE.FrontSide,
+        roughness: 0.8,
+        metalness: 0.0,
+        displacementScale: 0.5,
+        displacementBias: -0.0,
+        transmission: 0.2,
         specularIntensity: 0.0,
-        thickness: 0.3,   // Depth in world units, controls how much light penetrates
-        envMapIntensity: 0.0, // Keep reflections minimal
+        thickness: 0.3,
+        envMapIntensity: 0.0,
         normalMapType: THREE.TangentSpaceNormalMap,
     });
 
-
-    function loadTexture(url, mapType, isEXR = false) {
+    function loadTexture(url, mapType) {
         if (!url) return;
-        const loader = isEXR ? exrLoader : textureLoader;
+        let loader;
+        if (url.toLowerCase().endsWith('.dds')) {
+            loader = ddsLoader;
+        } else if (url.toLowerCase().endsWith('.exr')) {
+            loader = exrLoader;
+        } else {
+            loader = textureLoader;
+        }
+
         const onLoaded = texture => {
             texture.wrapS = THREE.RepeatWrapping;
             texture.wrapT = THREE.RepeatWrapping;
-            texture.repeat.set(25, 25); // Test with lower values (e.g., 20, 20 or 50, 50)
+            texture.repeat.set(25, 25);
 
-            // Default filtering for all textures
-            texture.minFilter = THREE.LinearMipmapLinearFilter; // Use mipmaps for downscaling
-            texture.magFilter = THREE.LinearFilter; // Smooth upscaling
-            texture.generateMipmaps = !isEXR; // Only generate mipmaps for non-EXR
-
-            // Special handling for normal map to reduce noise
-            if (mapType === 'normalMap' || mapType === 'baseColorUrl') {
-                texture.minFilter = THREE.LinearMipmapLinearFilter; // Ensure mipmapping
-                texture.magFilter = THREE.LinearFilter; // Smooth magnification
-                texture.generateMipmaps = !isEXR;
-                texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 4); // Get anisotropy
-                mat.normalScale = new THREE.Vector2(0.3, 0.3); // Reduce intensity (default is 1, 1)
-                if (isEXR) {
-                    texture.encoding = THREE.LinearEncoding; // Normal maps should stay linear
-                }
-            } else if (isEXR) {
-                texture.encoding = THREE.LinearEncoding; // EXR encoding
+            if (mapType === 'map') {
+                texture.encoding = THREE.sRGBEncoding;
             } else {
-                texture.encoding = THREE.sRGBEncoding; // Base color in sRGB
+                texture.encoding = THREE.LinearEncoding;
+            }
+
+            texture.minFilter = THREE.LinearMipmapLinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+
+            if (!(texture instanceof THREE.CompressedTexture)) {
+                texture.generateMipmaps = true;
+            }
+
+            if (mapType === 'normalMap') {
+                texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 4);
+                mat.normalScale = new THREE.Vector2(0.3, 0.3);
             }
 
             mat[mapType] = texture;
@@ -273,13 +277,12 @@ function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUr
         );
     }
 
-    // Load textures with automatic EXR detection
-    loadTexture(baseColorUrl, 'map', baseColorUrl.endsWith('.exr'));
-    loadTexture(normalUrl, 'normalMap', normalUrl.endsWith('.exr'));
-    loadTexture(roughnessUrl, 'roughnessMap', roughnessUrl.endsWith('.exr'));
-    loadTexture(aoUrl, 'aoMap', aoUrl.endsWith('.exr'));
-    loadTexture(displacementUrl, 'displacementMap', displacementUrl.endsWith('.exr'));
-    loadTexture(displacementUrl, 'thicknessMap', displacementUrl && displacementUrl.endsWith('.exr')); // Reuse displacement
+    loadTexture(baseColorUrl, 'map');
+    loadTexture(normalUrl, 'normalMap');
+    loadTexture(roughnessUrl, 'roughnessMap');
+    loadTexture(aoUrl, 'aoMap');
+    loadTexture(displacementUrl, 'displacementMap');
+    loadTexture(displacementUrl, 'thicknessMap');
 
     return mat;
 }
@@ -288,11 +291,11 @@ function createTerrain() {
     // Terrain geometry
     const terrainGeometry = new THREE.PlaneGeometry(800, 800, 150, 150);
     const sandMaterial = createPBRMaterial(
-        'textures/sandy2/ground_0024_color_1k.jpg',
-        'textures/sandy2/ground_0024_normal_opengl_1k_8bit.png',
-        'textures/sandy2/ground_0024_roughness_1k.jpg',
-        'textures/sandy2/ground_0024_height_1k.png',
-        'textures/sandy2/ground_0024_ao_1k.jpg',
+        'textures/sandy2/ground_0024_color_1k.DDS',
+        'textures/sandy2/ground_0024_normal_opengl_1k.DDS',
+        'textures/sandy2/ground_0024_roughness_1k.DDS',
+        'textures/sandy2/ground_0024_height_1k.DDS',
+        'textures/sandy2/ground_0024_ao_1k.DDS',
     )
 
     // Add gentle hills using noise
