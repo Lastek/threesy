@@ -419,7 +419,7 @@ function createCoastlineVegetation() {
             // Random tree rotation and scale
             const rotationY = Math.random() * Math.PI * 2;
             const scale = minTreeScale + Math.random() * (maxTreeScale - minTreeScale);
-            type = 'models/low_poly_palm_tree.glb';
+            const type = 'models/low_poly_palm_tree.glb';
             createPalmTree(
                 position.x, 
                 position.y, 
@@ -472,7 +472,7 @@ function createPalmTree(x, y, z, rotY, scale, type) {
             // gltf.cameras; // Array<THREE.Camera>
             // gltf.asset; // Object
             palmCache.set(type, gltf.scene);
-            instantiatePalm(x, y, z, rotY, scale);
+            instantiatePalm(x, y, z, rotY, scale, type);
         //     console.log(`Palm tree loaded at (${x}, ${terrainHeight}, ${z})`);
         // },
         // (progress) => {
@@ -484,7 +484,7 @@ function createPalmTree(x, y, z, rotY, scale, type) {
 
     );
     } else {
-        instantiatePalm(x, y, z, rotY, scale);
+        instantiatePalm(x, y, z, rotY, scale, type);
     }
 }
 
