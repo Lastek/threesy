@@ -1,13 +1,12 @@
 import * as THREE from 'three';
 import { SimplexNoise } from 'three/examples/jsm/math/SimplexNoise';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
-import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'; // Add this import at the top
-import * as sRand from '../src/seededRand.js'
-import Stats from 'three/examples/jsm/libs/stats.module.js';
-import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
+import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader'; // Add this import at the top
+import * as sRand from '../src/seededRand'
+import Stats from 'three/examples/jsm/libs/stats.module';
+import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min';
 import { DDSLoader } from 'three/examples/jsm/loaders/DDSLoader';
 // import * as joy from '../src/joystick.js';
-// document.body.appendChild(shadowFolder.dom);
 const stats = new Stats();
 document.body.appendChild(stats.dom);
 
@@ -67,7 +66,7 @@ function getTerrainHeightAt(x, z) {
 
     // Add early exit for distant areas
     if (Math.abs(x) > 400 || Math.abs(z) > 400) return 0;
-    
+
     // Use simplified calculation for distant areas
     if (Math.abs(x) > 200 || Math.abs(z) > 200) {
         return (Math.sin(x * 0.03) + Math.cos(z * 0.02)) * 2;
@@ -118,11 +117,10 @@ function collectOrb(index) {
 
 function init() {
 
-const gui = new GUI();
-const shadowFolder = gui.addFolder('Shadows');
+    const gui = new GUI();
+    const shadowFolder = gui.addFolder('Shadows');
     clock = new THREE.Clock();
     sRand.setSeed(2);
-    // joy.init(document);
     // Scene
     scene = new THREE.Scene();
     scene.background = new THREE.Color(colors.sky);
@@ -158,7 +156,7 @@ const shadowFolder = gui.addFolder('Shadows');
 
     // const directionalLight = new THREE.HemisphereLight(0x99aaee,0xffffff, 0.8);
     const sun = new THREE.DirectionalLight(0xffffff, 1.8);
-    sun.position.set(100,180, 50); // Positioned behind the terrain
+    sun.position.set(100, 180, 50); // Positioned behind the terrain
     sun.castShadow = true;
     sun.shadow.mapSize.width = 2048;
     sun.shadow.mapSize.height = 2048;
@@ -286,20 +284,20 @@ function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUr
     loadTexture(aoUrl, 'aoMap');
     loadTexture(displacementUrl, 'displacementMap');
     loadTexture(displacementUrl, 'thicknessMap');
-
     return mat;
 }
 
 function createTerrain() {
-    // Terrain geometry
-    const terrainGeometry = new THREE.PlaneGeometry(800, 800, 150, 150);
-    const sandMaterial = createPBRMaterial(
+    const sandTextures = [
         'textures/sandy2/ground_0024_color_1k.DDS',
         'textures/sandy2/ground_0024_normal_opengl_1k.DDS',
         'textures/sandy2/ground_0024_roughness_1k.DDS',
         'textures/sandy2/ground_0024_height_1k.DDS',
-        'textures/sandy2/ground_0024_ao_1k.DDS',
-    )
+        'textures/sandy2/ground_0024_ao_1k.DDS'
+    ]
+    const sandMaterial = createPBRMaterial(...sandTextures);
+    // Terrain geometry
+    const terrainGeometry = new THREE.PlaneGeometry(800, 800, 150, 150);
 
     // Add gentle hills using noise
     const vertices = terrainGeometry.attributes.position.array;
@@ -406,10 +404,10 @@ function createCoastlineVegetation() {
         const t = i / (clusterCount - 1);
         const curvePoint = coastlineCurve.getPoint(t);
         const tangent = coastlineCurve.getTangent(t).normalize();
-        
+
         // Get perpendicular direction for offset
         const perpendicular = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
-        
+
         // Create cluster around this point
         for (let j = 0; j < treesPerCluster; j++) {
             // Random offset in both tangent and perpendicular directions
@@ -418,113 +416,58 @@ function createCoastlineVegetation() {
                 .add(tangent.clone().multiplyScalar((Math.random() - 0.5) * clusterSpread * 0.5));
 
             const position = curvePoint.clone().add(offset);
-            
+
             // Get actual terrain height
             position.y = getTerrainHeightAt(position.x, position.z);
-            
+
             // Random tree rotation and scale
             const rotationY = Math.random() * Math.PI * 2;
             const scale = minTreeScale + Math.random() * (maxTreeScale - minTreeScale);
             const type = 'models/low_poly_palm_tree.glb';
             createPalmTree(
-                position.x, 
-                position.y, 
-                position.z, 
-                rotationY, 
+                position.x,
+                position.y,
+                position.z,
+                rotationY,
                 scale,
                 type
             );
         }
     }
 }
-// Call with: addCurveVisualizer(coastlinePoints);
-function createPalmTreeLine_old() {
 
-    const spawnPoint = new THREE.Vector3(30, 0, -30); // Near player spawn (y adjusted by terrain)
-    const treeLineLength = 50; // Length of the treeline along X axis
-    const clusterCount = 6; // Number of clusters
-    const treesPerCluster = 8; // Trees per cluster
-    const clusterSpread = 10; // Max distance trees spread within a cluster
-    const offsetZ = 10; // Distance from spawn along Z axis to avoid player overlap
-
-    for (let i = 0; i < clusterCount; i++) {
-        // Base position for each cluster along the X axis
-        const clusterX = spawnPoint.x - treeLineLength / 2 + (i * treeLineLength) / (clusterCount - 1);
-        const clusterZ = spawnPoint.z + offsetZ + Math.sin(i / (clusterCount - 1) * Math.PI) * 5;
-        // Create a cluster of trees
-        for (let j = 0; j < treesPerCluster; j++) {
-            // Random offset within cluster
-            const offsetX = (Math.random() - 0.5) * clusterSpread;
-            const offsetZ = (Math.random() - 0.5) * clusterSpread;
-            const rotY = 20+(Math.random()*360) * clusterSpread;
-            const x = clusterX + offsetX;
-            const z = clusterZ + offsetZ;
-            const scale = 0.9 * (0.8 + Math.random() * 0.4); // 0.16 to 0.28
-            // Use existing createPalmTree function
-            // Pass 0 for y since terrain height is handled inside
-            createPalmTree(x, 0, z, rotY,scale);
-        }
-    }
-}
 function createPalmTree(x, y, z, rotY, scale, type) {
     if (!palmCache.has(type)) {
         // Load once and clone
-    const loader = new GLTFLoader();
-    loader.load(
-        type, (gltf) => {
-
-            gltf.scene; // THREE.Group
-            // gltf.scenes; // Array<THREE.Group>
-            // gltf.cameras; // Array<THREE.Camera>
-            // gltf.asset; // Object
-            palmCache.set(type, gltf.scene);
-            instantiatePalm(x, y, z, rotY, scale, type);
-        //     console.log(`Palm tree loaded at (${x}, ${terrainHeight}, ${z})`);
-        // },
-        // (progress) => {
-        //     console.log(`Loading palm tree: ${(progress.loaded / progress.total * 100).toFixed(2)}%`);
-        // },
-        // (error) => {
-        //     console.error('Error loading palm tree model:', error);
-        }
-
-    );
-    } else {
-        instantiatePalm(x, y, z, rotY, scale, type);
-    }
+        const loader = new GLTFLoader();
+        loader.load(
+            type, (gltf) => {
+                gltf.scene;
+                palmCache.set(type, gltf.scene);
+                instantiatePalm(x, y, z, rotY, scale, type);
+            }
+        );
+    } else { instantiatePalm(x, y, z, rotY, scale, type); }
 }
 
 function instantiatePalm(x, y, z, rotY, scale, type) {
-    const tree = palmCache.get(type).clone();
-    tree.scale.set(scale, scale, scale);
-    // Position on terrain
     const terrainHeight = getTerrainHeightAt(x, z);
-    tree.position.set(x, terrainHeight, z);
-    tree.rotation.set(0,rotY, 0);
-    // gltf.animations; // Array<THREE.AnimationClip>
+    const tree = palmCache.get(type).clone();
+    
+    tree.scale.set(scale, scale, scale);
+    tree.position.set(x, terrainHeight, z); // Position on terrain
+    tree.rotation.set(0, rotY, 0); // Rotate on XZ plane
     // Enable shadows and inspect materials
     tree.traverse((child) => {
-            if (child.isMesh) {
-                child.castShadow = true; // Only cast shadows for every other tree
-                child.receiveShadow = true;
-            // Detailed material logging
-            console.log('Mesh name:', child.name);
-            console.log('Material:', {
-                name: child.material.name,
-                color: child.material.color?.getHexString(),
-                map: child.material.map ? 'Texture present' : 'No texture',
-                specular: child.material.specular?.getHexString(),
-                glossiness: child.material.glossiness,
-                extensions: child.material.extensions
-            });
-            
+        if (child.isMesh) {
+            child.castShadow = true; // Only cast shadows for every other tree
+            child.receiveShadow = true;
             // Fix texture color space
             if (child.material.map) {
                 child.material.map.colorSpace = THREE.SRGBColorSpace;
                 child.material.needsUpdate = true;
             }
-            // child.materials.shadowSide = THREE.FrontSide;
-
+            child.material.shadowSide = THREE.FrontSide;
         }
     });
 
@@ -536,24 +479,23 @@ function instantiatePalm(x, y, z, rotY, scale, type) {
 let rockGeometry, rockMaterial, rockMesh;
 
 function createRocks() {
+    const matrix = new THREE.Matrix4();
+
     rockGeometry = new THREE.SphereGeometry(1, 4, 4);
     rockMaterial = new THREE.MeshStandardMaterial({ color: colors.rock });
     rockMesh = new THREE.InstancedMesh(rockGeometry, rockMaterial, 20);
-    const matrix = new THREE.Matrix4();
     for (let i = 0; i < 20; i++) {
         const scale = 0.2 + Math.random() * 0.8;
-        matrix.makeScale(scale, scale * 0.8, scale);
-        
+
         const position = new THREE.Vector3(
             (Math.random() - 0.5) * 200,
             0.5,
             (Math.random() - 0.5) * 200
         );
+        matrix.makeScale(scale, scale * 0.8, scale);
         matrix.setPosition(position);
-        
         rockMesh.setMatrixAt(i, matrix);
     }
-
     // const cullable = new CullableObject(rockMesh);
     // cullableObjects.push(cullable);
     scene.add(rockMesh);
@@ -570,13 +512,12 @@ function updateWater() {
     }
 }
 
-
 // New functions
 function createOrb(x, z) {
     const orbGeometry = new THREE.SphereGeometry(0.3, 16, 16);
     const orbMaterial = new THREE.MeshPhysicalMaterial({
-        color: 0xffff00,
-        emissive: 0xffff00,
+        color: 0xffef50,
+        emissive: 0xffff30,
         emissiveIntensity: 0.6,
         roughness: 0.2,
         metalness: 0.1,
@@ -587,7 +528,6 @@ function createOrb(x, z) {
 
     const orb = new THREE.Mesh(orbGeometry, orbMaterial);
     const terrainHeight = getTerrainHeightAt(x, z);
-    console.log("Orbs: ${terrainHeight} | ${x}, ${z}", terrainHeight, x, z);
     orb.position.set(x, terrainHeight + 1.5, z);
     orb.castShadow = true;
     orb.userData = {
