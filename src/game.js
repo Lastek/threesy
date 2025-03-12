@@ -214,11 +214,23 @@ function updateAxesWidget() {
     axesHelper.position.copy(pos);
     axesHelper.rotation.set(0, 0, 0); // Keep aligned with global axes (optional: match camera rotation)
 }
+
 function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUrl, aoUrl) {
     const textureLoader = new THREE.TextureLoader();
-    const exrLoader = new EXRLoader();
     const ddsLoader = new DDSLoader();
-    const mat = new THREE.MeshPhysicalMaterial({
+    const exrLoader = new EXRLoader();
+
+    // Default fallback material (sand-like appearance)
+    const fallbackMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0xEDC9AF, // Sandy color
+        roughness: 0.8,
+        metalness: 0.0,
+        shadowSide: THREE.FrontSide
+    });
+    const fallbackTexture = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAFiUAABYlAUlSJPAAAACQSURBVHhe7dAxAQAgEIBAI385e9ngLUADGG5h5Lw7a9YAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiibyAbMfugtC4CK4i+wAAAAASUVORK5CYII=";
+
+    // Primary material definition
+    const physical_material = new THREE.MeshPhysicalMaterial({
         color: 0xEDC9AF,
         shadowSide: THREE.FrontSide,
         roughness: 0.8,
@@ -229,62 +241,83 @@ function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUr
         specularIntensity: 0.0,
         thickness: 0.3,
         envMapIntensity: 0.0,
-        normalMapType: THREE.TangentSpaceNormalMap,
+        normalMapType: THREE.TangentSpaceNormalMap
     });
 
-    function loadTexture(url, mapType) {
-        if (!url) return;
+    // Function to load a texture with a Promise
+    function loadTexture(url, mapType, mat) {
+        if (!url) return Promise.resolve(null); // Skip if no URL
+
         let loader;
-        if (url.toLowerCase().endsWith('.dds')) {
+        if (url.endsWith('.dds')) {
             loader = ddsLoader;
-        } else if (url.toLowerCase().endsWith('.exr')) {
+        } else if (url.endsWith('.exr')) {
             loader = exrLoader;
         } else {
             loader = textureLoader;
         }
 
-        const onLoaded = texture => {
-            texture.wrapS = THREE.RepeatWrapping;
-            texture.wrapT = THREE.RepeatWrapping;
-            texture.repeat.set(25, 25);
+        return new Promise((resolve, reject) => {
+            loader.load(
+                url,
+                (texture) => {
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    texture.repeat.set(25, 25);
 
-            if (mapType === 'map') {
-                texture.encoding = THREE.sRGBEncoding;
-            } else {
-                texture.encoding = THREE.LinearEncoding;
-            }
+                    texture.minFilter = THREE.LinearMipmapLinearFilter;
+                    texture.magFilter = THREE.LinearFilter;
 
-            texture.minFilter = THREE.LinearMipmapLinearFilter;
-            texture.magFilter = THREE.LinearFilter;
+                    if (!(texture instanceof THREE.CompressedTexture)) {
+                        texture.generateMipmaps = true;
+                    }
 
-            if (!(texture instanceof THREE.CompressedTexture)) {
-                texture.generateMipmaps = true;
-            }
+                    if (mapType === 'map') {
+                        texture.encoding = THREE.sRGBEncoding;
+                    } else {
+                        texture.encoding = THREE.LinearEncoding;
+                    }
 
-            if (mapType === 'normalMap') {
-                texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 4);
-                mat.normalScale = new THREE.Vector2(0.3, 0.3);
-            }
+                    if (mapType === 'normalMap') {
+                        texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 4);
+                        mat.normalScale = new THREE.Vector2(0.3, 0.3);
+                    }
 
-            mat[mapType] = texture;
-            mat.needsUpdate = true;
-        };
-
-        loader.load(
-            url,
-            onLoaded,
-            undefined,
-            err => console.error(`Error loading ${mapType} from ${url}:`, err)
-        );
+                    mat[mapType] = texture;
+                    mat.needsUpdate = true;
+                    resolve(texture);
+                },
+                ()=>{},
+                (err) => {
+                    console.error(`Failed to load ${mapType} texture from ${url}:`, err);
+                    reject(err);
+                }
+            );
+        });
     }
 
-    loadTexture(baseColorUrl, 'map');
-    loadTexture(normalUrl, 'normalMap');
-    loadTexture(roughnessUrl, 'roughnessMap');
-    loadTexture(aoUrl, 'aoMap');
-    loadTexture(displacementUrl, 'displacementMap');
-    loadTexture(displacementUrl, 'thicknessMap');
-    return mat;
+    // Load all textures concurrently and handle failures
+    const texturePromises = [
+        loadTexture(baseColorUrl, 'map'),
+        loadTexture(normalUrl, 'normalMap'),
+        loadTexture(roughnessUrl, 'roughnessMap'),
+        loadTexture(displacementUrl, 'displacementMap'),
+        loadTexture(aoUrl, 'aoMap'),
+        loadTexture(displacementUrl, 'thicknessMap') // Reusing displacement
+    ];
+
+    return Promise.allSettled(texturePromises).then((results) => {
+        const hasFailures = results.some(result => result.status === 'rejected');
+        if (hasFailures) {
+            console.warn('One or more textures failed to load; using fallback material');
+            functionLoad
+            return fallbackMaterial;
+        }
+        return mat; // All textures loaded successfully
+    }).catch((err) => {
+        console.error('Unexpected error in texture loading:', err);
+        return fallbackMaterial; // Fallback on unexpected errors
+    });
 }
 
 function createTerrain() {
