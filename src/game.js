@@ -1,33 +1,66 @@
 import * as THREE from 'three';
-import { SimplexNoise } from 'three/examples/jsm/math/SimplexNoise';
+// import { SimplexNoise } from 'three/examples/jsm/math/SimplexNoise';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader'; // Add this import at the top
 import * as sRand from '../src/seededRand'
 import Stats from 'three/examples/jsm/libs/stats.module';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min';
 import { DDSLoader } from 'three/examples/jsm/loaders/DDSLoader';
+
 // import * as joy from '../src/joystick.js';
 const stats = new Stats();
 document.body.appendChild(stats.dom);
 
-let scene, camera, renderer, clock;
+let scene, cameraRig, camera, lights, renderer, clock;
+
+const Gui = new GUI();
+let shadowFolder;
+
+let deltaTime ;
 let terrain, character, water;
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
 let canJump = true, velocity = new THREE.Vector3(), isJumping = false;
-let characterSpeed = 0.23;
-let gravity = 0.005;
+let characterSpeed = 20;
+let gravity = 0.0098;
 let jumpForce = 0.2;
-
 let orbs = [];
 let collectedOrbs = 0;
 
 const palmCache = new Map();
+// Add these variables near the top with other global variables
+let isMouseDown = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+let MOUSE_SENSITIVITY = 0.002;
+let isPointerLocked = false;
+
+// Add these variables near the other character variables
+let moveVelocity = new THREE.Vector2(0, 0); // x and z velocity for movement
+const MAX_SPEED = 20.0; // Same as previous characterSpeed
+const ACCELERATION = 420.015;
+const DECELERATION = 120.01;
+const TURN_SPEED = 0.15; // How quickly the character turns to face movement direction
 // Camera settings
-let cameraAngle = 0;
-const CAMERA_HEIGHT = 3;
-const CAMERA_DISTANCE = 5;
-const CAMERA_LERP = 0.1;
-const ROTATION_SPEED = 0.02;
+let cameraDistance = 1; // Increased from 2 for better view
+let cameraLerp = 2.1;
+let cameraAngle = 0;         // Yaw (horizontal rotation)
+let cameraPitch = 0.3;       // Pitch (vertical rotation)
+let MIN_PITCH = -0.5;      // radians
+let MAX_PITCH = 0.5;
+// Camera quaternions for smooth rotation
+let currentCameraQuat = new THREE.Quaternion();
+let targetCameraQuat = new THREE.Quaternion();
+let cameraRotationMatrix = new THREE.Matrix4();
+// Add camera velocity for spring physics
+let cameraVelocity = new THREE.Vector3();
+// Advanced camera settings
+let minCameraDistance = 0.2;
+let cameraSpringStrength = 0.15;
+let cameraDamping = 0.4;
+let cameraHeight = 2;    // Changed from const to let
+// Character
+let model, skeleton, mixer;
+let idleAction, walkAction, runAction;
 
 const frustum = new THREE.Frustum();
 const cameraViewProjectionMatrix = new THREE.Matrix4();
@@ -60,66 +93,21 @@ const colors = {
     character: 0xdefdef// Added missing character color
 };
 
-// Helper function to get the terrain height at a given (x, z)
-function getTerrainHeightAt(x, z) {
-    if (!terrain) return 0;
-
-    // Add early exit for distant areas
-    if (Math.abs(x) > 400 || Math.abs(z) > 400) return 0;
-
-    // Use simplified calculation for distant areas
-    if (Math.abs(x) > 200 || Math.abs(z) > 200) {
-        return (Math.sin(x * 0.03) + Math.cos(z * 0.02)) * 2;
-    }
-
-    const raycaster = new THREE.Raycaster();
-    const origin = new THREE.Vector3(x, 100, z); // Higher origin (above max terrain height)
-    const direction = new THREE.Vector3(0, -1, 0);
-    raycaster.set(origin, direction);
-    terrain.updateMatrixWorld()
-    const intersects = raycaster.intersectObject(terrain, true);
-
-    if (intersects.length > 0) {
-        return intersects[0].point.y;
-    }
-
-    // Fallback: try multiple nearby points for hilly areas
-    // const offsets = [
-    //     [0, 0],   // Center
-    //     [1, 0],   // Right
-    //     [-1, 0],  // Left
-    //     [0, 1],   // Up
-    //     [0, -1]   // Down
-    // ];
-    // let heightSum = 0;
-    // let validHits = 0;
-
-    // // for (const [dx, dz] of offsets) {
-    //     raycaster.set(new THREE.Vector3(x + dx, 100, z + dz), direction);
-    //     const nearbyIntersects = raycaster.intersectObject(terrain, true);
-    //     if (nearbyIntersects.length > 0) {
-    //         heightSum += nearbyIntersects[0].point.y;
-    //         validHits++;
-    //     }
-    // }
-
-    return 0; // Average height or 0 if no hits
-}
-//
 // Add cleanup for collected orbs
-function collectOrb(index) {
-    const orb = orbs[index];
-    scene.remove(orb);
-    orb.geometry.dispose();
-    orb.material.dispose();
-    orbs.splice(index, 1);
-}
 
-function init() {
+// Camera debug helpers
+let cameraForwardArrow, cameraRightArrow, cameraUpArrow;
+const ARROW_LENGTH = 2;
+const ARROW_COLORS = {
+    forward: 0x0000ff, // Blue for forward
+    right: 0xff0000,   // Red for right
+    up: 0x00ff00       // Green for up
+};
 
-    const gui = new GUI();
-    const shadowFolder = gui.addFolder('Shadows');
+async function init() {
     clock = new THREE.Clock();
+    // deltaTime = clock.getDelta();
+    // deltaTime = 1
     sRand.setSeed(2);
     // Scene
     scene = new THREE.Scene();
@@ -132,13 +120,203 @@ function init() {
     scene.add(axesHelper);
 
     // Camera
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.1, 600);
     camera.position.set(0, 5, 10);
+    // Initialize in your setup code
+    cameraRig = new THREE.Object3D();
+    scene.add(cameraRig);
+    cameraRig.add(camera);
 
+    initRenderer();
+
+    lights = initLights();
+    Object.values(lights).forEach(element => {
+        console.info(element);
+        scene.add(element);
+    });
+
+    await createTerrain();
+    createWater();
+    await createCharacter();
+    setupControls();
+    createCoastlineVegetation();
+    createOrbs();
+    createRocks();
+
+    window.addEventListener('resize', onWindowResize, false);
+    document.body.appendChild(renderer.domElement);
+    animate();
+    createFoldout();
+    // console.log(scene.remove(character));
+
+    // console.log(JSON.stringify(scene.toJSON()));
+
+    // Create camera orientation helpers
+    createCameraHelpers();
+}
+
+function createFoldout() {
+    shadowFolder = Gui.addFolder('Shadows');
+    shadowFolder.add(renderer.shadowMap, 'enabled').name('Enable Shadows');
+    shadowFolder.add(lights['sunLight'], 'castShadow').name('Light Cast Shadows');
+    shadowFolder.add(lights['sunLight'].shadow, 'bias', -0.01, 0.01).name('Shadow Bias');
+    shadowFolder.add(lights['sunLight'].shadow.camera, 'near', 0.1, 100).name('Shadow Near');
+    shadowFolder.add(lights['sunLight'].shadow.camera, 'far', 1, 500).name('Shadow Far');
+    shadowFolder.open();
+
+    const characterFolder = Gui.addFolder('Character');
+    characterFolder.add(character, 'visible').name('Enable Character');
+
+    const characterControls = {
+        removeCharacter: function () {
+            scene.remove(character);
+        },
+        addCharacter: function () {
+            scene.add(character);
+        }
+    };
+
+    characterFolder.add(characterControls, 'removeCharacter').name('Remove Character');
+    characterFolder.add(characterControls, 'addCharacter').name('Add Character');
+    characterFolder.open();
+
+    // Camera and Controls GUI
+    const cameraFolder = Gui.addFolder('Camera');
+    const cameraControls = {
+        // Basic camera settings
+        distance: cameraDistance,
+        height: cameraHeight,
+        minDistance: minCameraDistance,
+        
+        // Mouse sensitivity
+        mouseSensitivity: MOUSE_SENSITIVITY,
+        
+        // Camera pitch limits
+        minPitch: MIN_PITCH,
+        maxPitch: MAX_PITCH,
+        currentPitch: cameraPitch,
+        
+        // Camera movement settings
+        lerpSpeed: cameraLerp,
+        springStrength: cameraSpringStrength,
+        damping: cameraDamping,
+        
+        // Auto-follow settings
+        swivelSpeed: CAMERA_SWIVEL_SPEED,
+        swivelThreshold: CAMERA_SWIVEL_THRESHOLD,
+        maxSwivelAngle: MAX_SWIVEL_ANGLE,
+        
+        // Reset camera
+        resetCamera: function() {
+            cameraAngle = 0;
+            cameraPitch = 0.3;
+            targetCameraAngle = 0;
+        }
+    };
+
+    // Basic camera controls
+    cameraFolder.add(cameraControls, 'distance', 0.2, 10)
+        .name('Camera Distance')
+        .onChange(value => { cameraDistance = value; });
+    
+    cameraFolder.add(cameraControls, 'height', 0, 8)
+        .name('Camera Height')
+        .onChange(value => { cameraHeight = value; });
+    
+    cameraFolder.add(cameraControls, 'minDistance', 0.5, 5)
+        .name('Min Distance')
+        .onChange(value => { minCameraDistance = value; });
+
+    // Mouse sensitivity
+    cameraFolder.add(cameraControls, 'mouseSensitivity', 0.0001, 0.01)
+        .name('Mouse Sensitivity')
+        .onChange(value => { MOUSE_SENSITIVITY = value; });
+
+    // Camera pitch settings
+    const pitchFolder = cameraFolder.addFolder('Pitch Settings');
+    pitchFolder.add(cameraControls, 'minPitch', -Math.PI/2, 0)
+        .name('Min Pitch')
+        .onChange(value => { MIN_PITCH = value; });
+    
+    pitchFolder.add(cameraControls, 'maxPitch', 0, Math.PI/2)
+        .name('Max Pitch')
+        .onChange(value => { MAX_PITCH = value; });
+    
+    pitchFolder.add(cameraControls, 'currentPitch', -Math.PI/2, Math.PI/2)
+        .name('Current Pitch')
+        .onChange(value => { cameraPitch = value; });
+
+    // Camera movement settings
+    const movementFolder = cameraFolder.addFolder('Movement Settings');
+    movementFolder.add(cameraControls, 'lerpSpeed', 0.1, 5)
+        .name('Lerp Speed')
+        .onChange(value => { cameraLerp = value; });
+    
+    movementFolder.add(cameraControls, 'springStrength', 0.05, 1)
+        .name('Spring Strength')
+        .onChange(value => { cameraSpringStrength = value; });
+    
+    movementFolder.add(cameraControls, 'damping', 0.1, 1)
+        .name('Damping')
+        .onChange(value => { cameraDamping = value; });
+
+    // Auto-follow settings
+    const followFolder = cameraFolder.addFolder('Auto-Follow Settings');
+    followFolder.add(cameraControls, 'swivelSpeed', 0.01, 0.1)
+        .name('Swivel Speed')
+        .onChange(value => { CAMERA_SWIVEL_SPEED = value; });
+    
+    followFolder.add(cameraControls, 'swivelThreshold', 0.01, 0.5)
+        .name('Swivel Threshold')
+        .onChange(value => { CAMERA_SWIVEL_THRESHOLD = value; });
+    
+    followFolder.add(cameraControls, 'maxSwivelAngle', 0, Math.PI)
+        .name('Max Swivel Angle')
+        .onChange(value => { MAX_SWIVEL_ANGLE = value; });
+
+    // Reset button
+    cameraFolder.add(cameraControls, 'resetCamera').name('Reset Camera');
+
+    // Open the main camera folder by default
+    cameraFolder.open();
+
+    // Add debug visualization controls
+    const debugFolder = Gui.addFolder('Debug Visualization');
+    const debugControls = {
+        showCameraOrientation: false,
+        arrowLength: ARROW_LENGTH
+    };
+
+    debugFolder.add(debugControls, 'showCameraOrientation')
+        .name('Show Camera Orientation')
+        .onChange(value => {
+            cameraForwardArrow.visible = value;
+            cameraRightArrow.visible = value;
+            cameraUpArrow.visible = value;
+        });
+
+    debugFolder.add(debugControls, 'arrowLength', 0.5, 5)
+        .name('Arrow Length')
+        .onChange(value => {
+            cameraForwardArrow.setLength(value, value * 0.1, value * 0.05);
+            cameraRightArrow.setLength(value, value * 0.1, value * 0.05);
+            cameraUpArrow.setLength(value, value * 0.1, value * 0.05);
+        });
+
+    debugFolder.open();
+}
+
+function toggleVisible(object) {
+    if (object.visible) {
+        object.visible = false;
+    } else { object.visible = true; }
+}
+
+function initRenderer() {
     // Renderer
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer = new THREE.WebGLRenderer({ antialias: false });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Reduced from 2
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.0)); // Reduced from 2
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.9;
     renderer.shadowMap.enabled = true;
@@ -149,48 +327,35 @@ function init() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.8;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Cap at 2 for performance
+}
 
+function initLights() {
     // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // Increased from 0.6 for softer lighting
-    scene.add(ambientLight);
-
     // const directionalLight = new THREE.HemisphereLight(0x99aaee,0xffffff, 0.8);
-    const sun = new THREE.DirectionalLight(0xffffff, 1.8);
-    sun.position.set(100, 180, 50); // Positioned behind the terrain
-    sun.castShadow = true;
-    sun.shadow.mapSize.width = 2048;
-    sun.shadow.mapSize.height = 2048;
-    sun.shadow.camera.top = 200;
-    sun.shadow.camera.bottom = - 200;
-    sun.shadow.camera.left = - 200;
-    sun.shadow.camera.right = 200;
-    sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 4000;
-    scene.add(sun);
+    const sunLight = new THREE.DirectionalLight(0xffffff, 1.8);
+    sunLight.position.set(100, 180, 50); // Positioned behind the terrain
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 2048;
+    sunLight.shadow.mapSize.height = 2048;
+    // Viewbox for sunLight camera (effective distance)
+    sunLight.shadow.camera.top = 200;
+    sunLight.shadow.camera.bottom = -200;
+    sunLight.shadow.camera.left = - 200;
+    sunLight.shadow.camera.right = 200;
+    sunLight.shadow.camera.near = 1;
+    sunLight.shadow.camera.far = 400;
     // Add a backlight for transmission effect
     const backLight = new THREE.DirectionalLight(0xffffff, 0.1);
     backLight.position.set(-100, 50, -50); // Positioned behind the terrain
-    scene.add(backLight);
 
-    shadowFolder.add(renderer.shadowMap, 'enabled').name('Enable Shadows');
-    shadowFolder.add(sun, 'castShadow').name('Light Cast Shadows');
-    shadowFolder.add(sun.shadow, 'bias', -0.01, 0.01).name('Shadow Bias');
-    shadowFolder.add(sun.shadow.camera, 'near', 0.1, 100).name('Shadow Near');
-    shadowFolder.add(sun.shadow.camera, 'far', 1, 500).name('Shadow Far');
-    createTerrain();
-    createWater();
-    createCharacter();
-    setupControls();
-    createCoastlineVegetation();
-    createOrbs();
-    createRocks();
-    window.addEventListener('resize', onWindowResize, false);
-    document.body.appendChild(renderer.domElement);
-
-
-    shadowFolder.open();
-    animate();
+    return {
+        'sunLight': sunLight,
+        'ambientLight': ambientLight,
+        'backLight': backLight,
+    }
 }
+
 function updateAxesWidget() {
     const axesHelper = scene.getObjectByName('axesWidget') || scene.children.find(child => child instanceof THREE.AxesHelper);
     if (!axesHelper) return;
@@ -215,7 +380,7 @@ function updateAxesWidget() {
     axesHelper.rotation.set(0, 0, 0); // Keep aligned with global axes (optional: match camera rotation)
 }
 
-function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUrl, aoUrl) {
+async function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUrl, aoUrl) {
     const textureLoader = new THREE.TextureLoader();
     const ddsLoader = new DDSLoader();
     const exrLoader = new EXRLoader();
@@ -227,7 +392,7 @@ function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUr
         metalness: 0.0,
         shadowSide: THREE.FrontSide
     });
-    const fallbackTexture = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAFiUAABYlAUlSJPAAAACQSURBVHhe7dAxAQAgEIBAI385e9ngLUADGG5h5Lw7a9YAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiibyAbMfugtC4CK4i+wAAAAASUVORK5CYII=";
+    const fallbackTexture_src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAFiUAABYlAUlSJPAAAACQSURBVHhe7dAxAQAgEIBAI385e9ngLUADGG5h5Lw7a9YAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiiYNoGjSAIomDaBo0gCKJg2gaNIAiibyAbMfugtC4CK4i+wAAAAASUVORK5CYII=";
 
     // Primary material definition
     const physical_material = new THREE.MeshPhysicalMaterial({
@@ -249,9 +414,9 @@ function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUr
         if (!url) return Promise.resolve(null); // Skip if no URL
 
         let loader;
-        if (url.endsWith('.dds')) {
+        if (url.toLowerCase().endsWith('.dds')) {
             loader = ddsLoader;
-        } else if (url.endsWith('.exr')) {
+        } else if (url.toLowerCase().endsWith('.exr')) {
             loader = exrLoader;
         } else {
             loader = textureLoader;
@@ -261,6 +426,7 @@ function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUr
             loader.load(
                 url,
                 (texture) => {
+                    if (texture.image.height === 0) reject(false); // Hack: Loader will not fail otherwise if it can't load a texture for some reason.
                     texture.wrapS = THREE.RepeatWrapping;
                     texture.wrapT = THREE.RepeatWrapping;
                     texture.repeat.set(25, 25);
@@ -272,12 +438,6 @@ function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUr
                         texture.generateMipmaps = true;
                     }
 
-                    if (mapType === 'map') {
-                        texture.encoding = THREE.sRGBEncoding;
-                    } else {
-                        texture.encoding = THREE.LinearEncoding;
-                    }
-
                     if (mapType === 'normalMap') {
                         texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 4);
                         mat.normalScale = new THREE.Vector2(0.3, 0.3);
@@ -287,7 +447,7 @@ function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUr
                     mat.needsUpdate = true;
                     resolve(texture);
                 },
-                ()=>{},
+                undefined,
                 (err) => {
                     console.error(`Failed to load ${mapType} texture from ${url}:`, err);
                     reject(err);
@@ -298,29 +458,34 @@ function createPBRMaterial(baseColorUrl, normalUrl, roughnessUrl, displacementUr
 
     // Load all textures concurrently and handle failures
     const texturePromises = [
-        loadTexture(baseColorUrl, 'map'),
-        loadTexture(normalUrl, 'normalMap'),
-        loadTexture(roughnessUrl, 'roughnessMap'),
-        loadTexture(displacementUrl, 'displacementMap'),
-        loadTexture(aoUrl, 'aoMap'),
-        loadTexture(displacementUrl, 'thicknessMap') // Reusing displacement
+        loadTexture(baseColorUrl, 'map', physical_material),
+        loadTexture(normalUrl, 'normalMap', physical_material),
+        loadTexture(roughnessUrl, 'roughnessMap', physical_material),
+        loadTexture(displacementUrl, 'displacementMap', physical_material),
+        loadTexture(aoUrl, 'aoMap', physical_material),
+        loadTexture(displacementUrl, 'thicknessMap', physical_material) // Reusing displacement
     ];
 
     return Promise.allSettled(texturePromises).then((results) => {
+        const textureMaps = ['map', 'normalMap', 'roughnessMap', 'displacementMap', 'aoMap', 'thicknessMap'];
         const hasFailures = results.some(result => result.status === 'rejected');
+
         if (hasFailures) {
             console.warn('One or more textures failed to load; using fallback material');
-            functionLoad
+            loadTexture(fallbackTexture_src, 'map', fallbackMaterial);
+            console.warn(fallbackMaterial);
             return fallbackMaterial;
         }
-        return mat; // All textures loaded successfully
+        return physical_material; // All textures loaded successfully
     }).catch((err) => {
         console.error('Unexpected error in texture loading:', err);
+        loadTexture(fallbackTexture_src, 'map', fallbackMaterial);
+        console.warn(fallbackMaterial);
         return fallbackMaterial; // Fallback on unexpected errors
     });
 }
 
-function createTerrain() {
+async function createTerrain() {
     const sandTextures = [
         'textures/sandy2/ground_0024_color_1k.DDS',
         'textures/sandy2/ground_0024_normal_opengl_1k.DDS',
@@ -328,45 +493,140 @@ function createTerrain() {
         'textures/sandy2/ground_0024_height_1k.DDS',
         'textures/sandy2/ground_0024_ao_1k.DDS'
     ]
-    const sandMaterial = createPBRMaterial(...sandTextures);
-    // Terrain geometry
+    //////////////////////
+    // Terrain geometry //
+    //////////////////////
     const terrainGeometry = new THREE.PlaneGeometry(800, 800, 150, 150);
-
     // Add gentle hills using noise
     const vertices = terrainGeometry.attributes.position.array;
     for (let i = 0; i < vertices.length; i += 3) {
         vertices[i + 2] = (Math.sin(vertices[i] * 0.03) + Math.cos(vertices[i + 1] * 0.02)) * 2;
     }
-
     // Update geometry buffers
     terrainGeometry.attributes.position.needsUpdate = true;
     terrainGeometry.computeVertexNormals();
-
-    sandMaterial.shadowSide = THREE.FrontSide;
-    // Create terrain mesh
-    terrain = new THREE.Mesh(terrainGeometry, sandMaterial);
-    terrain.rotation.x = -Math.PI / 2;
-    terrain.receiveShadow = true;
-    terrain.position
-    scene.add(terrain);
+    function skin_mesh(plane_geometry, material) {
+        material.shadowSide = THREE.FrontSide;
+        terrain = new THREE.Mesh(plane_geometry, material);
+        terrain.rotation.x = -Math.PI / 2;
+        terrain.receiveShadow = true;
+        return terrain;
+    }
+    await createPBRMaterial(...sandTextures).then((sandMaterial) => {
+        skin_mesh(terrainGeometry, sandMaterial);
+        scene.add(terrain);
+    }).catch(err => { console.error('Failed to create terrain:', err); })
 }
+async function loadCharacterModel() {
+    const loader = new GLTFLoader();
+    return new Promise((resolve, reject) => {
+        loader.load('models/Soldier.glb', function (gltf) {
+            model = gltf.scene;
 
+            // Calculate model height and adjust position
+            const bbox = new THREE.Box3().setFromObject(model);
+            const modelHeight = bbox.max.y - bbox.min.y;
+            const modelWidth = bbox.max.x - bbox.min.x;
+            console.log("Model height:", modelHeight, "Model width:", modelWidth);
+
+            // Create capsule helper with adjusted radius
+            const radius = modelWidth / 4; // Smaller radius
+            const height = modelHeight - (radius * 2);
+            const capsuleGeometry = new THREE.CapsuleGeometry(radius, height, 4, 8);
+            const wireframeMaterial = new THREE.MeshBasicMaterial({
+                color: 0xff0000,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.5
+            });
+            const capsuleHelper = new THREE.Mesh(capsuleGeometry, wireframeMaterial);
+            capsuleHelper.name = 'characterCapsule';
+
+            // Adjust capsule position to better match character's feet
+            capsuleHelper.position.y = height / 2 + radius / 2 + radius / 6;
+            model.add(capsuleHelper);
+
+            // Store capsule parameters for collision
+            model.userData.capsule = {
+                radius: radius,
+                height: height,
+                helper: capsuleHelper
+            };
+
+            // Add debug controls to GUI
+            const debugFolder = Gui.addFolder('Debug');
+            debugFolder.add(capsuleHelper, 'visible').name('Show Collision Capsule');
+            debugFolder.open();
+
+            scene.add(model);
+            model.traverse(function (object) {
+                if (object.isMesh) object.castShadow = true;
+            });
+
+            skeleton = new THREE.SkeletonHelper(model);
+            skeleton.visible = false;
+            scene.add(skeleton);
+
+            // Set up animation mixer
+            mixer = new THREE.AnimationMixer(model);
+
+            // Get all animations
+            const animations = gltf.animations;
+            console.log("Available animations:", animations.map(a => a.name));
+
+            // Create and store actions
+            idleAction = mixer.clipAction(animations[0]);
+            walkAction = mixer.clipAction(animations[3]);
+            runAction = mixer.clipAction(animations[1]);
+
+            // Configure animations
+            walkAction.timeScale = 2; // Speed up walking animation
+
+            // Set up action properties
+            [idleAction, walkAction, runAction].forEach(action => {
+                if (action) {
+                    action.clampWhenFinished = false;
+                    action.loop = THREE.LoopRepeat;
+                    action.enabled = true;
+                }
+            });
+
+            // Start with idle
+            idleAction.play();
+
+            resolve(model);
+        });
+    }).catch((err) => {
+        console.error("Failed to load model: ", err);
+        // reject(err);
+    });
+}
 // Keep only ONE createCharacter function (replace both with this version)
-function createCharacter() {
-    const bodyGeometry = new THREE.CapsuleGeometry(0.3, 1, 4, 8);
-    const headGeometry = new THREE.SphereGeometry(0.4);
-    const material = new THREE.MeshStandardMaterial({ color: colors.character });
+async function createCharacter() {
 
-    const body = new THREE.Mesh(bodyGeometry, material);
-    const head = new THREE.Mesh(headGeometry, material);
-    head.position.y = 1.2;
+    // character = new THREE.Group();
+    await loadCharacterModel().then((char) => {
+        console.log("char");
+        console.log(char);
 
-    character = new THREE.Group();
-    character.add(body, head);
+        // char.position.set(0, 4, 0);
+        character = char;
+        // char['quaternion']['_w'];
+    });
+    // const bodyGeometry = new THREE.CapsuleGeometry(0.3, 1, 4, 8);
+    // const headGeometry = new THREE.SphereGeometry(0.4);
+    // const material = new THREE.MeshStandardMaterial({ color: colors.character });
+
+    // const body = new THREE.Mesh(bodyGeometry, material);
+    // const head = new THREE.Mesh(headGeometry, material);
+    // head.position.y = 1.2;
+
+    // character.add(body, head);
     character.castShadow = true;
-    character.position.set(0, 4, 0);
+    character.position.set(0, 2, 0);
     scene.add(character);
 }
+
 
 function createWater() {
     const waterGeometry = new THREE.PlaneGeometry(800, 800);
@@ -486,7 +746,7 @@ function createPalmTree(x, y, z, rotY, scale, type) {
 function instantiatePalm(x, y, z, rotY, scale, type) {
     const terrainHeight = getTerrainHeightAt(x, z);
     const tree = palmCache.get(type).clone();
-    
+
     tree.scale.set(scale, scale, scale);
     tree.position.set(x, terrainHeight, z); // Position on terrain
     tree.rotation.set(0, rotY, 0); // Rotate on XZ plane
@@ -592,24 +852,60 @@ function updateOrbs() {
         lastOrbUpdate = time;
     }
 }
-// function createCharacter() {
-//     const geometry = new THREE.BoxGeometry(0.5, 1, 0.5);
-//     const material = new THREE.MeshStandardMaterial({
-//         color: colors.character,
-//         flatShading: true
-//     });
-//     character = new THREE.Mesh(geometry, material);
-//     character.position.set(0, getTerrainHeightAt(0, 0) + 10.2, 0);
-//     character.castShadow = true;
-//     scene.add(character);
-
-//     camera.position.set(0, 8, 5);
-//     camera.lookAt(character.position);
-// }
 
 function setupControls() {
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
+    
+    // Mouse controls for pointer lock - only on canvas
+    renderer.domElement.addEventListener('click', (event) => {
+        if (!isPointerLocked && event.target === renderer.domElement) {
+            renderer.domElement.requestPointerLock();
+        }
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+        isPointerLocked = document.pointerLockElement === renderer.domElement;
+    });
+
+    // Auto-exit pointer lock when GUI is clicked
+    Gui.domElement.addEventListener('mousedown', () => {
+        if (document.pointerLockElement) {
+            document.exitPointerLock();
+        }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (isPointerLocked) {
+            // Create rotation quaternions in camera's local space
+            const rotationX = new THREE.Quaternion().setFromAxisAngle(
+                new THREE.Vector3(0, 1, 0),
+                -e.movementX * MOUSE_SENSITIVITY
+            );
+            
+            // Get camera's right vector for pitch rotation
+            const cameraRight = new THREE.Vector3(1, 0, 0).applyQuaternion(currentCameraQuat);
+            const rotationY = new THREE.Quaternion().setFromAxisAngle(
+                cameraRight,
+                -e.movementY * MOUSE_SENSITIVITY
+            );
+            
+            // Apply pitch first, then yaw
+            currentCameraQuat.multiply(rotationY);
+            currentCameraQuat.multiply(rotationX);
+            
+            // Extract and clamp pitch
+            const euler = new THREE.Euler().setFromQuaternion(currentCameraQuat, 'YXZ');
+            euler.x = Math.max(MIN_PITCH, Math.min(MAX_PITCH, euler.x));
+            
+            // Reconstruct quaternion with clamped pitch
+            currentCameraQuat.setFromEuler(euler);
+            
+            // Store this as the target for smooth transitions
+            targetCameraQuat.copy(currentCameraQuat);
+        }
+    });
+
     document.addEventListener('keypress', (event) => {
         if (event.code === 'Space' && canJump) {
             velocity.y = jumpForce;
@@ -638,62 +934,127 @@ function onKeyUp(event) {
 }
 
 function updateCharacter() {
-    const direction = new THREE.Vector3();
-    if (moveForward) direction.z -= 1;
-    if (moveBackward) direction.z += 1;
-    if (moveLeft) {
-        direction.x -= 1;
-        cameraAngle += ROTATION_SPEED;
-    }
-    if (moveRight) {
-        direction.x += 1;
-        cameraAngle -= ROTATION_SPEED;
-    }
-    direction.normalize();
-
-    // Rotate movement by camera angle
-    const rotatedDirection = direction.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraAngle);
-    character.position.x += rotatedDirection.x * characterSpeed;
-    character.position.z += rotatedDirection.z * characterSpeed;
-
-    if (direction.length() > 0) {
-        character.rotation.y = cameraAngle + Math.atan2(direction.x, direction.z);
+    // Get input direction relative to camera
+    const inputDirection = new THREE.Vector2(0, 0);
+    if (moveForward) inputDirection.y += 1;
+    if (moveBackward) inputDirection.y -= 1;
+    if (moveLeft) inputDirection.x -= 1;  // Changed: Flipped sign for correct camera-relative movement
+    if (moveRight) inputDirection.x += 1;  // Changed: Flipped sign for correct camera-relative movement
+    
+    // Only normalize if there is input
+    if (inputDirection.length() > 0) {
+        inputDirection.normalize();
     }
 
+    // Apply acceleration based on input
+    if (inputDirection.length() > 0) {
+        // Get camera's forward direction (ignoring pitch)
+        const cameraForward = new THREE.Vector3(0, 0, -1).applyQuaternion(currentCameraQuat);
+        cameraForward.y = 0;  // Project onto XZ plane
+        cameraForward.normalize();
+        
+        // Get camera's right direction
+        const cameraRight = new THREE.Vector3(1, 0, 0).applyQuaternion(currentCameraQuat);
+        cameraRight.y = 0;  // Project onto XZ plane
+        cameraRight.normalize();
+        
+        // Calculate movement direction in world space
+        const moveDirection = new THREE.Vector3()
+            .addScaledVector(cameraForward, inputDirection.y)
+            .addScaledVector(cameraRight, inputDirection.x)
+            .normalize();
+        
+        // Accelerate in movement direction
+        moveVelocity.x += moveDirection.x * ACCELERATION * deltaTime;
+        moveVelocity.y += moveDirection.z * ACCELERATION * deltaTime;  // Use z component for forward/back
+
+        // Limit speed
+        const currentSpeed = moveVelocity.length();
+        if (currentSpeed > MAX_SPEED) {
+            moveVelocity.multiplyScalar(MAX_SPEED / currentSpeed);
+        }
+    } else {
+        // Apply deceleration when no input
+        const currentSpeed = moveVelocity.length();
+        if (currentSpeed > 0) {
+            const newSpeed = Math.max(0, currentSpeed - DECELERATION * deltaTime);
+            if (newSpeed === 0) {
+                moveVelocity.set(0, 0);
+            } else {
+                moveVelocity.multiplyScalar(newSpeed / currentSpeed);
+            }
+        }
+    }
+
+    // Apply movement in world space
+    character.position.x += moveVelocity.x * deltaTime;
+    character.position.z += moveVelocity.y * deltaTime;
+
+    // Character rotation
+    if (moveVelocity.length() > 0.01) {
+        // FIXED: Calculate target rotation based on actual movement direction in Three.js space
+        const targetRotation = Math.atan2(-moveVelocity.x, -moveVelocity.y);
+        
+        // Smoothly interpolate rotation
+        let currentRotation = character.rotation.y;
+        let rotationDiff = targetRotation - currentRotation;
+        
+        // Normalize the rotation difference to [-PI, PI]
+        while (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
+        while (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
+        
+        character.rotation.y = currentRotation + rotationDiff * TURN_SPEED * deltaTime * 60;
+    }
+
+    // Animation state management based on velocity
+    const speed = moveVelocity.length();
+    if (speed > 0.01) {
+        if (!runAction.isRunning()) {
+            fadeToAction(runAction, 0.2);
+        }
+        // Scale animation speed with movement speed
+        if (runAction) {
+            runAction.timeScale = Math.max(0.7, Math.min(2.0, speed / MAX_SPEED * 2));
+        }
+    } else {
+        if (!idleAction.isRunning()) {
+            fadeToAction(idleAction, 0.2);
+        }
+    }
+
+    // Vertical movement (jumping/gravity)
     velocity.y -= gravity;
     character.position.y += velocity.y;
 
-    // Raycast downward to detect the terrain surface
+    // Ground collision check
     const raycaster = new THREE.Raycaster();
-    const origin = new THREE.Vector3(character.position.x, character.position.y + 1, character.position.z);
-    const down = new THREE.Vector3(0, -1, 0);
-    raycaster.set(origin, down);
-    const intersects = raycaster.intersectObject(terrain, true);
+    const capsule = character.userData.capsule;
+    if (capsule) {
+        const origin = new THREE.Vector3(
+            character.position.x,
+            character.position.y + capsule.radius / 2,
+            character.position.z
+        );
+        const down = new THREE.Vector3(0, -1, 0);
+        raycaster.set(origin, down);
+        const intersects = raycaster.intersectObject(terrain, false);
 
-    if (intersects.length > 0) {
-        const groundY = intersects[0].point.y;
-        if (character.position.y < groundY + 1.2) {
-            character.position.y = groundY + 1.2;
-            velocity.y = 0;
-            isJumping = false;
-            canJump = true;
-        }
-    }
-    // ... existing code up to terrain raycast ...
-    if (intersects.length > 0) {
-        const groundY = intersects[0].point.y;
-        if (character.position.y < groundY + 1.2) {
-            character.position.y = groundY + 1.2;
-            velocity.y = 0;
-            isJumping = false;
-            canJump = true;
+        if (intersects.length > 0) {
+            const groundY = intersects[0].point.y;
+            if (character.position.y < groundY + capsule.radius / 2) {
+                character.position.y = groundY + capsule.radius / 2;
+                velocity.y = 0;
+                isJumping = false;
+                canJump = true;
+            }
         }
     }
 
+    // Orb collection
     for (let i = orbs.length - 1; i >= 0; i--) {
         const orb = orbs[i];
         const distance = character.position.distanceTo(orb.position);
-        if (distance < 0.8) {
+        if (distance < 1.8) {
             scene.remove(orb);
             orbs.splice(i, 1);
             collectedOrbs++;
@@ -704,29 +1065,106 @@ function updateCharacter() {
     updateCamera();
 }
 
-function updateCamera() {
+// Add these variables near other camera variables
+let targetCameraAngle = cameraAngle;
+let CAMERA_SWIVEL_SPEED = 5.0;  // Increased for more responsive following
+let CAMERA_SWIVEL_THRESHOLD = 0.1;
+let MAX_SWIVEL_ANGLE = Math.PI * 0.5; // Increased to allow faster turning
 
-    const idealOffset = new THREE.Vector3(
-        Math.sin(cameraAngle) * CAMERA_DISTANCE,
-        CAMERA_HEIGHT,
-        Math.cos(cameraAngle) * CAMERA_DISTANCE
-    );
-    const targetPosition = character.position.clone().add(idealOffset);
-    camera.position.lerp(targetPosition, CAMERA_LERP);
-    const lookAtPos = character.position.clone();
-    lookAtPos.y += 1;
+function updateCamera() {
+    // Only calculate auto-follow when not actively moving mouse and character is moving
+    if (moveVelocity.length() > CAMERA_SWIVEL_THRESHOLD && !isPointerLocked) {
+        // Create a quaternion for the desired look direction
+        const movementDir = new THREE.Vector3(moveVelocity.x, 0, moveVelocity.y).normalize();
+        
+        // Only rotate if the angle difference is significant
+        const currentForward = new THREE.Vector3(0, 0, -1).applyQuaternion(currentCameraQuat);
+        currentForward.y = 0;
+        currentForward.normalize();
+        
+        const angleToTarget = currentForward.angleTo(movementDir);
+        if (angleToTarget > 0.01) {
+            // Determine rotation direction (clockwise or counterclockwise)
+            const cross = new THREE.Vector3().crossVectors(currentForward, movementDir);
+            const rotationDirection = Math.sign(cross.y);
+            
+            // Calculate limited rotation
+            const rotationAmount = Math.min(angleToTarget, MAX_SWIVEL_ANGLE * deltaTime);
+            const rotationQuat = new THREE.Quaternion().setFromAxisAngle(
+                new THREE.Vector3(0, 1, 0),
+                rotationAmount * rotationDirection
+            );
+            
+            // Apply the rotation to the target quaternion
+            targetCameraQuat.copy(currentCameraQuat).multiply(rotationQuat);
+        }
+    }
+
+    // Smooth camera rotation using spherical interpolation
+    const interpolationFactor = Math.min(CAMERA_SWIVEL_SPEED * deltaTime * 60, 1.0);
+    currentCameraQuat.slerp(targetCameraQuat, interpolationFactor);
+    currentCameraQuat.normalize(); // Ensure quaternion stays normalized
+    
+    // Apply rotation to camera rig
+    cameraRig.setRotationFromQuaternion(currentCameraQuat);
+    
+    // Calculate camera position using quaternion
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(currentCameraQuat);
+    const up = new THREE.Vector3(0, 1, 0);
+    
+    // Calculate ideal camera position
+    const offset = new THREE.Vector3()
+        .addScaledVector(forward, -cameraDistance)
+        .addScaledVector(up, cameraHeight);
+    
+    const idealRigPosition = character.position.clone().add(offset);
+    
+    // Check for camera collisions
+    const adjustedPosition = checkCameraCollision(idealRigPosition);
+    
+    // Smooth position transition using spring physics
+    const positionDelta = adjustedPosition.clone().sub(cameraRig.position);
+    const springForce = positionDelta.multiplyScalar(cameraSpringStrength);
+    
+    // Apply spring physics with damping
+    cameraVelocity.add(springForce);
+    cameraVelocity.multiplyScalar(1 - cameraDamping);
+    cameraRig.position.add(cameraVelocity);
+    
+    // Look at character (slightly above feet)
+    const lookAtPos = character.position.clone().add(new THREE.Vector3(0, 1, 0));
     camera.lookAt(lookAtPos);
+
+    // Update debug visualization arrows if visible
+    if (cameraForwardArrow && cameraForwardArrow.visible) {
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(currentCameraQuat);
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(currentCameraQuat);
+        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(currentCameraQuat);
+
+        cameraForwardArrow.setDirection(forward);
+        cameraRightArrow.setDirection(right);
+        cameraUpArrow.setDirection(up);
+    }
 }
 
-// function updateCamera() {
-//     // Add distance check
-//     const maxDistance = 100;
-//     if (camera.position.distanceTo(character.position) > maxDistance) {
-//         camera.position.copy(character.position).add(idealOffset);
-//     } else {
-//         camera.position.lerp(targetPosition, CAMERA_LERP);
-//     }
-// }
+// Add this helper function for camera collision detection
+function checkCameraCollision(position) {
+    const raycaster = new THREE.Raycaster();
+    const origin = character.position.clone();
+    origin.y += 1; // Start slightly above character
+
+    const direction = position.clone().sub(origin).normalize();
+    const distance = position.distanceTo(origin);
+
+    raycaster.set(origin, direction);
+    const intersects = raycaster.intersectObject(terrain);
+
+    if (intersects.length > 0 && intersects[0].distance < distance) {
+        return intersects[0].point.clone().add(direction.multiplyScalar(-minCameraDistance));
+    }
+
+    return position;
+}
 
 function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -735,28 +1173,145 @@ function onWindowResize() {
 }
 
 function animate() {
-    stats.begin()
+    stats.begin();
+    deltaTime = clock.getDelta(); // Ensure you have a THREE.Clock
     requestAnimationFrame(animate);
-    // // Update frustum and check visibility
-    // updateFrustum();
-    // cullableObjects.forEach(obj => {
-    //     obj.checkVisibility();
-    // });
 
-    // // Only update visible objects
-    // cullableObjects.forEach(obj => {
-    //     if (obj.visible) {
-    //         // Update object-specific logic here
-    //     }
-    // });
+    if (mixer) {
+        mixer.update(deltaTime);
+    }
+
     updateCharacter();
     updateWater();
     updateOrbs();
     updateAxesWidget();
+    updateBoundingBox();
 
     renderer.render(scene, camera);
     renderer.shadowMap.needsUpdate = true;
-    stats.end()
+    stats.end();
 }
 
-init();
+function getTerrainHeightAt(x, z) {
+    if (!terrain) return 0;
+
+    // Add early exit for distant areas
+    if (Math.abs(x) > 400 || Math.abs(z) > 400) return 0;
+
+    // Use simplified calculation for distant areas
+    if (Math.abs(x) > 200 || Math.abs(z) > 200) {
+        return (Math.sin(x * 0.03) + Math.cos(z * 0.02)) * 2;
+    }
+
+    const raycaster = new THREE.Raycaster();
+    const origin = new THREE.Vector3(x, 100, z); // Higher origin (above max terrain height)
+    const direction = new THREE.Vector3(0, -1, 0);
+    raycaster.set(origin, direction);
+    terrain.updateMatrixWorld()
+    const intersects = raycaster.intersectObject(terrain, true);
+
+    if (intersects.length > 0) {
+        return intersects[0].point.y;
+    }
+
+    // Fallback: try multiple nearby points for hilly areas
+    // const offsets = [
+    //     [0, 0],   // Center
+    //     [1, 0],   // Right
+    //     [-1, 0],  // Left
+    //     [0, 1],   // Up
+    //     [0, -1]   // Down
+    // ];
+    // let heightSum = 0;
+    // let validHits = 0;
+
+    // // for (const [dx, dz] of offsets) {
+    //     raycaster.set(new THREE.Vector3(x + dx, 100, z + dz), direction);
+    //     const nearbyIntersects = raycaster.intersectObject(terrain, true);
+    //     if (nearbyIntersects.length > 0) {
+    //         heightSum += nearbyIntersects[0].point.y;
+    //         validHits++;
+    //     }
+    // }
+
+    return 0; // Average height or 0 if no hits
+}
+
+// Proper animation transition function
+function fadeToAction(newAction, duration = 0.2, scale = 1.0) {
+    if (!newAction || !mixer) return;
+
+    // Stop any current animations
+    if (idleAction) idleAction.fadeOut(duration);
+    if (walkAction) walkAction.fadeOut(duration);
+    if (runAction) runAction.fadeOut(duration);
+
+    // Start new animation
+    newAction.reset();
+    newAction.fadeIn(duration);
+    if (newAction === runAction) {
+        newAction.timeScale = scale;
+    }
+    newAction.play();
+}
+
+function updateBoundingBox() {
+    const bboxHelper = scene.getObjectByName('characterBBox');
+    if (bboxHelper) {
+        const bbox = new THREE.Box3().setFromObject(character);
+        bboxHelper.box.copy(bbox);
+    }
+}
+
+function createCameraHelpers() {
+    // Create arrows for camera orientation
+    const arrowOptions = {
+        dir: new THREE.Vector3(0, 0, -1),
+        origin: new THREE.Vector3(0, 0, 0),
+        length: ARROW_LENGTH,
+        headLength: 0.2,
+        headWidth: 0.1
+    };
+
+    // Forward arrow (blue Z-axis)
+    cameraForwardArrow = new THREE.ArrowHelper(
+        arrowOptions.dir,
+        arrowOptions.origin,
+        arrowOptions.length,
+        ARROW_COLORS.forward,
+        arrowOptions.headLength,
+        arrowOptions.headWidth
+    );
+
+    // Right arrow (red X-axis)
+    cameraRightArrow = new THREE.ArrowHelper(
+        new THREE.Vector3(1, 0, 0),
+        arrowOptions.origin,
+        arrowOptions.length,
+        ARROW_COLORS.right,
+        arrowOptions.headLength,
+        arrowOptions.headWidth
+    );
+
+    // Up arrow (green Y-axis)
+    cameraUpArrow = new THREE.ArrowHelper(
+        new THREE.Vector3(0, 1, 0),
+        arrowOptions.origin,
+        arrowOptions.length,
+        ARROW_COLORS.up,
+        arrowOptions.headLength,
+        arrowOptions.headWidth
+    );
+
+    // Add arrows to camera rig
+    cameraRig.add(cameraForwardArrow);
+    cameraRig.add(cameraRightArrow);
+    cameraRig.add(cameraUpArrow);
+
+    // Hide by default
+    cameraForwardArrow.visible = false;
+    cameraRightArrow.visible = false;
+    cameraUpArrow.visible = false;
+}
+
+init().catch(err => console.error('Init failed:', err));
